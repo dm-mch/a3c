@@ -75,7 +75,7 @@ class Player(Thread):
     @staticmethod
     #@profile
     def worker_loop(self):
-        sleep(self.id * 2)
+        sleep(self.id/10.)
         print("Player %d started!" % self.id)
         episode = 0
         rewards = []

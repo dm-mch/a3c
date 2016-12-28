@@ -10,6 +10,11 @@ from keras.models import Model
 from common import Network
 from summary import Summary
 
+
+def linear_decrise_op(config, global_step, name):
+    return tf.identity(config['max'] - (config['max'] - config['min']) * tf.minimum(tf.cast(global_step, tf.float32)/float(config['period']), 1), name = name)
+
+
 class A3CBase(Network):
     """
     Base class for critic (value) and actor (policy) networks
@@ -47,7 +52,8 @@ class A3CBase(Network):
             self._build_summary(config.summary_step)
         else:
             # target should have shared opimizer
-            self.optimizer = tf.train.RMSPropOptimizer(config.lr, decay=0.99, epsilon=0.1)
+            self.lr = linear_decrise_op(config.lr, self.global_step, 'learning_rate')
+            self.optimizer = tf.train.RMSPropOptimizer(self.lr, decay=0.99, epsilon=0.1)
 
 
     def _build_summary(self, summary_step):
@@ -74,15 +80,16 @@ class A3CBase(Network):
 
         log_prob = tf.log(self.p_out + 1e-6)
         advantage = tf.sub(self.rewards, value, name='advantage')
-        entropy_beta = tf.identity(self.eb['max'] - (self.eb['max'] - self.eb['min']) * tf.minimum(tf.cast(self.global_step, tf.float32)/float(self.eb['period']), 1), name = 'entropy_beta')
+        entropy_beta = linear_decrise_op(self.eb, self.global_step, 'entropy_beta')
         xentropy_loss = -tf.reduce_sum(self.p_out * log_prob, 1)
         log_pi_a_given_s = tf.reduce_sum(log_prob * a_one_hot, 1)
         policy_loss = -tf.reduce_sum(log_pi_a_given_s * advantage  + entropy_beta * xentropy_loss)
-        value_loss = 0.5 * tf.nn.l2_loss(advantage) # tf.maximum(self.entropy_beta,1)
+        value_loss = tf.nn.l2_loss(advantage) # tf.maximum(self.entropy_beta,1)
 
-        self.total_loss = policy_loss + value_loss# + entropy_beta * xentropy_loss
-        #batch_size = tf.cast(tf.shape(self.rewards)[0], tf.float32)
-        #self.total_loss = tf.truediv(self.total_loss,batch_size,name='total_loss')
+        #pc = 1 - linear_decrise_op({'max': 1, 'min': 0, 'period': 10*4}, self.global_step, 'pc')
+        self.total_loss = 0.5 * policy_loss + value_loss# + entropy_beta * xentropy_loss
+        batch_size = tf.cast(tf.shape(self.rewards)[0], tf.float32)
+        self.total_loss = tf.truediv(self.total_loss,batch_size,name='total_loss')
 
         if self.with_summary:
             self.for_summary_scalar += [
@@ -221,6 +228,30 @@ class A3CFFNetwork(A3CBase):
 
         return policy_network, value_network
 
+class A3CFlatNetwork(A3CBase):
+    """
+    Simple convolution nets for a3c
+
+    """
+    def create_networks(self):
+        """
+        Create Policy and Value net
+
+        """        
+        with tf.name_scope(self.name + "_nets"):
+            input = Input(shape=self.state_shape, tensor=self.states) # should by (x, y, t), where t is frames
+            shared = Flatten()(input)            
+            
+            shared = Dense(name="fc0", output_dim=64, activation='relu')(shared)
+            shared = Dense(name="fc1", output_dim=32, activation='relu')(shared)
+
+            policy = Dense(name="policy_softmax", output_dim=self.action_dim, activation='softmax')(shared)
+            value = Dense(name="value", output_dim=1)(shared)
+
+        policy_network = Model(input=input, output=policy)
+        value_network = Model(input=input, output=value)
+
+        return policy_network, value_network
 
     # def create_networks(self):
     #     """

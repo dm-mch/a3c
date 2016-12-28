@@ -6,12 +6,20 @@ from skimage.color import rgb2gray
 
 class Preprocessor:
     """ Fake simple prepocessor """
+    def __init__(self, config):
+        pass
+
     def process(self, frame):
         """
         Preprocess each frame of observed states
 
         """
         return frame
+
+class CartPolePreprocessor(Preprocessor):
+    def process(self, frame):
+        return frame/np.array([ 2.45,  4,  0.28,  4 ])
+
 
 class AtariPreprocessor(Preprocessor):
     """
@@ -88,7 +96,7 @@ class ShiftEnv(object):
         first = self.states[0] if len(self.states) > 0 else current
         sample =  np.stack([first] * self.tdim, axis=len(current.shape))
         # TODO: make for any deminision state
-        sample[:,:,self.tdim-1] = current
+        sample[:,self.tdim-1] = current
         if self._step == 0: 
             return sample
         # revert, skip, cut
@@ -99,12 +107,14 @@ class ShiftEnv(object):
 
         for f, indx in enumerate(indxs):
             # TODO: make for any deminision state
-            sample[:,:,len(indxs) - 1 - f] = self.states[indx]
+            sample[:,len(indxs) - 1 - f] = self.states[indx]
         return sample
 
     def step(self, action):
         s_t1, r, self.terminated, info = self.env.step(self.gym_actions[action])
         s_t1 = self.pre.process(s_t1)
+        if self.terminated:
+            r = 0 # workaround
         self.states.append(self.s_t)
         self.actions.append(action)
         self.rewards.append(r)
@@ -125,8 +135,8 @@ class ShiftEnv(object):
         samples =  [self._get_shift(buffer[0], offset=min(n,len(self.states)))]
         for i in range(1,len(buffer)):
             #TODO: care about different state shape 
-            old = np.array(samples[-1], copy = True)[:,:,1:] # All except 1 frame in last sample
-            samples.append(np.concatenate((old,buffer[i].reshape(buffer[i].shape[0], buffer[i].shape[1], 1)), axis = 2))
+            old = np.array(samples[-1], copy = True)[:,1:] # All except 1 frame in last sample
+            samples.append(np.concatenate((old,buffer[i].reshape(buffer[i].shape[0], 1)), axis = -1))
         values = self.get_values(n, predicted)
         actions = self.actions[-n:][::self.skip]
         assert len(samples) == len(values)

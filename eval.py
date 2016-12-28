@@ -5,17 +5,17 @@ import gym
 from time import time, sleep
 
 from player import Player
-from shiftenv import ShiftEnv, AtariPreprocessor
-from ca_network import A3CFFNetwork
+from shiftenv import ShiftEnv, CartPolePreprocessor
+from ca_network import A3CFlatNetwork
 from common import Config
 
 # Switch off GPU usage for CUDA, only CPU
 import os
-#os.environ["CUDA_VISIBLE_DEVICES"]=''
+os.environ["CUDA_VISIBLE_DEVICES"]=''
 
 
-GAME_NAME = 'Breakout-v0'
-MODEL_NAME = 'default_model'
+GAME_NAME = 'CartPole-v1' # 'Breakout-v0'
+MODEL_NAME = 'cp_model'
 # ATARI_RAW_SHAPE = (210, 160, 3)
 BREAKOUT_CROP = np.array([[48, 192], [8, 152]])
 NO_CROP = np.array([[0, 210], [0, 160]])
@@ -25,12 +25,12 @@ DOWNSAMPLE = 2
 #RESIZE = (84, 84)
 SKIP = 1
 LAMBDA = 0.99
-LR = 7e-4
-SUMMARY_STEP = 100
+LR = {'max': 7e-4, 'min': 1e-10, 'period': 10 * 10**4}
+SUMMARY_STEP = 10
 LIMIT_STEP = 1000000
-MAX_STEP = 5 * SKIP
-ENTROPY_BETA = {'max': 0.01, 'min': 0.001, 'period': 10 * 10**6} # linear decrise from max to min
-CLIP_GRAD_NORM = 40.
+MAX_STEP = 200 * SKIP
+ENTROPY_BETA = {'max': 0.1, 'min': 0.1, 'period': 1} # linear decrise from max to min
+CLIP_GRAD_NORM = 4.
 
 def get_shape(crop, downsample):
     return (int(round((crop[0,1] - crop[0,0])/downsample)), int(round((crop[1,1] - crop[1,0])/downsample))) 
@@ -64,15 +64,15 @@ def train(n_threads, game, steps, render=True, load_weights = True):
 
     config = Config({
         'sess':sess, 
-        'action_dim': get_action_dim(game),
-        'crop': get_crop(game),
-        'state_shape': get_shape(get_crop(game), DOWNSAMPLE) + (TDIM,),
+        'action_dim': 2,
+        'crop': None,
+        'state_shape': (4, TDIM),
         'summary_step': SUMMARY_STEP,
         'lr': LR,
         'global_step': global_step,
-        'preprocessor': AtariPreprocessor,
+        'preprocessor': CartPolePreprocessor,
         'skip': SKIP,
-        'downsample': DOWNSAMPLE,
+        'downsample': None,
         'tdim': TDIM,
         'lmbd': LAMBDA,
         'coord': coord,
@@ -85,7 +85,7 @@ def train(n_threads, game, steps, render=True, load_weights = True):
 
     print(config)
 
-    target_model = A3CFFNetwork("target", config, target = True, with_summary=False)
+    target_model = A3CFlatNetwork("target", config, target = True, with_summary=False)
     config['target_model'] = target_model
     if load_weights:
         try:
@@ -96,7 +96,7 @@ def train(n_threads, game, steps, render=True, load_weights = True):
     stat = [dict() for i in range(n_threads)]
     config['stat'] = stat
     envs = [ShiftEnv(gym.make(game), config) for i in range(n_threads)]
-    models = [A3CFFNetwork("Player_" + str(i), config, with_summary=(i==0)) for i in range(n_threads)]
+    models = [A3CFlatNetwork("Player_" + str(i), config, with_summary=(i==0)) for i in range(n_threads)]
     players = [Player(i, envs[i], models[i], config)  for i in range(n_threads)]
 
     # init all tf vars
@@ -116,14 +116,14 @@ def train(n_threads, game, steps, render=True, load_weights = True):
                 print("Coord should stop!")
                 break
 
-            if time() - last_check > 3: # sec.
+            if time() - last_check > 1: # sec.
                 last_gs = gs
                 gs = sess.run(global_step)
                 if gs >= steps:
                     print("All steps completed!")
                     break
                 cur_stat = prepare_stat(stat)
-                print("Step", gs, "Time per step %.4f" % ((time() - last_check)/(gs - last_gs)),
+                print("Step", gs, "Time per step %.6f" % ((time() - last_check)/(gs - last_gs)),
                       ", ".join([k + ': ' + '%.2f'%(float(v)) for k,v in cur_stat.items()]))
                 models[0].summary.custom_scalar_summary(global_step = gs, **cur_stat)
                 last_check = time()
@@ -139,5 +139,5 @@ def train(n_threads, game, steps, render=True, load_weights = True):
         coord.join(players)
 
 if __name__ == '__main__':
-    train(8, GAME_NAME, 10 * 10**6, render=False, load_weights = False)
+    train(8, GAME_NAME, 10 * 10**4, render=False, load_weights = False)
 
