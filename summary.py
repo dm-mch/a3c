@@ -54,6 +54,9 @@ class Summary:
                 self.names.append(op.name)
 
     def model(self, model):
+        """
+        Only for Keras models!
+        """
         for layer in model.layers:
             for weight in layer.weights:
                 if weight.name not in self.names:

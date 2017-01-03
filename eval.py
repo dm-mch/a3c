@@ -5,8 +5,7 @@ import gym
 from time import time, sleep
 
 from player import Player
-from shiftenv import ShiftEnv, AtariPreprocessor
-from ca_network import A3CFFNetwork
+from ca_network import A3CLstmNet
 from common import Config
 
 # Switch off GPU usage for CUDA, only CPU
@@ -14,30 +13,8 @@ import os
 #os.environ["CUDA_VISIBLE_DEVICES"]=''
 
 
-GAME_NAME = 'Breakout-v0'
-MODEL_NAME = 'default_model'
-# ATARI_RAW_SHAPE = (210, 160, 3)
-BREAKOUT_CROP = np.array([[48, 192], [8, 152]])
-NO_CROP = np.array([[0, 210], [0, 160]])
+GAME_NAME = 'Pong-v0'
 
-TDIM = 4
-DOWNSAMPLE = 2
-#RESIZE = (84, 84)
-SKIP = 1
-LAMBDA = 0.99
-LR = 7e-4
-SUMMARY_STEP = 100
-LIMIT_STEP = 1000000
-MAX_STEP = 5 * SKIP
-ENTROPY_BETA = {'max': 0.01, 'min': 0.001, 'period': 10 * 10**6} # linear decrise from max to min
-CLIP_GRAD_NORM = 40.
-
-def get_shape(crop, downsample):
-    return (int(round((crop[0,1] - crop[0,0])/downsample)), int(round((crop[1,1] - crop[1,0])/downsample))) 
-
-# workarounds for breakout
-def get_crop(game):
-    return BREAKOUT_CROP if game == 'Breakout-v0' else NO_CROP
 
 def get_action_dim(game):
     return 3 if game == 'Breakout-v0' or game == "Pong-v0" else 6
@@ -65,27 +42,25 @@ def train(n_threads, game, steps, render=True, load_weights = True):
     config = Config({
         'sess':sess, 
         'action_dim': get_action_dim(game),
-        'crop': get_crop(game),
-        'state_shape': get_shape(get_crop(game), DOWNSAMPLE) + (TDIM,),
-        'summary_step': SUMMARY_STEP,
-        'lr': LR,
+        'state_shape': (42, 42, 1),
+        'summary_step': 10,
+        'lr': {'max': 1e-4, 'min':0, 'period': 10**7},
         'global_step': global_step,
-        'preprocessor': AtariPreprocessor,
-        'skip': SKIP,
-        'downsample': DOWNSAMPLE,
-        'tdim': TDIM,
-        'lmbd': LAMBDA,
+        'gamma': 0.99,
         'coord': coord,
-        'limit_step': LIMIT_STEP,
-        'max_step': MAX_STEP,
-        'entropy_beta': ENTROPY_BETA,
-        'clip_grad_norm': CLIP_GRAD_NORM,
+        'limit_step': 10**7,
+        'max_step': 20,
+        'entropy_beta': {'max': 0.01, 'min': 0.01, 'period': 1}, # linear decrise from max to min
+        'clip_grad_norm': 40.,
+        #'rmsprop_decay': 0.99,
+        #'rmsprop_epsilon': 0.1,
+        'actions': [1,2,3] if get_action_dim(game) == 3 else list(range(get_action_dim(game))),
         'render': render
         })
 
     print(config)
 
-    target_model = A3CFFNetwork("target", config, target = True, with_summary=False)
+    target_model = A3CLstmNet("target", config, target = True, with_summary=False)
     config['target_model'] = target_model
     if load_weights:
         try:
@@ -95,9 +70,9 @@ def train(n_threads, game, steps, render=True, load_weights = True):
 
     stat = [dict() for i in range(n_threads)]
     config['stat'] = stat
-    envs = [ShiftEnv(gym.make(game), config) for i in range(n_threads)]
-    models = [A3CFFNetwork("Player_" + str(i), config, with_summary=(i==0)) for i in range(n_threads)]
-    players = [Player(i, envs[i], models[i], config)  for i in range(n_threads)]
+    envs = [gym.make(game) for i in range(n_threads)]
+    models = [A3CLstmNet("Player_" + str(i), config, with_summary=(i==0)) for i in range(n_threads)]
+    players = [Player(i, envs[i], models[i], config, render = render and (i==0))  for i in range(n_threads)]
 
     # init all tf vars
     init_op = tf.global_variables_initializer()
@@ -109,6 +84,7 @@ def train(n_threads, game, steps, render=True, load_weights = True):
     last_check = time()
     last_save = time()
     gs = 0
+    saver = target_model.get_saver()
     try:
         while True:
             sleep(0.1)
@@ -129,7 +105,7 @@ def train(n_threads, game, steps, render=True, load_weights = True):
                 last_check = time()
             if time() - last_save > 60:
                 last_save = time()
-                target_model.save()
+                target_model.save(saver)
     except Exception as e:
         print("Report exceptions to the coordinator.", e)
         coord.request_stop(e)
@@ -139,5 +115,5 @@ def train(n_threads, game, steps, render=True, load_weights = True):
         coord.join(players)
 
 if __name__ == '__main__':
-    train(8, GAME_NAME, 10 * 10**6, render=False, load_weights = False)
+    train(8, GAME_NAME, 10**7, render=True, load_weights = False)
 
